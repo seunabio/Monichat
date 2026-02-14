@@ -1,0 +1,930 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0c0f14" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="MoniChat" />
+  <meta name="description" content="MoniChat — Your financial memory. Track spending through natural conversation." />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta property="og:title" content="MoniChat — Your Financial Memory" />
+  <meta property="og:description" content="Track spending through natural conversation. Never wonder where your money went." />
+  <meta property="og:type" content="website" />
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="icon" type="image/png" href="/icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+  <title>MoniChat</title>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Source+Sans+3:wght@300;400;500;600&display=swap" rel="stylesheet" />
+
+  <style>
+    :root {
+      --font: 'Source Sans 3', system-ui, sans-serif;
+      --font-display: 'Outfit', sans-serif;
+      --bg-deep: #0c0f14;
+      --bg: #101318;
+      --surface: #191d25;
+      --surface-raised: #1f242e;
+      --border: #262c38;
+      --accent: #f59e0b;
+      --accent-soft: rgba(245,158,11,0.1);
+      --accent-border: rgba(245,158,11,0.2);
+      --mint: #34d399;
+      --text-primary: #eef0f4;
+      --text-secondary: #a0a8b8;
+      --text-muted: #5c6478;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #root { height: 100%; width: 100%; overflow: hidden; }
+    body {
+      font-family: var(--font);
+      background: var(--bg-deep);
+      color: var(--text-primary);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      /* Prevent pull-to-refresh on mobile */
+      overscroll-behavior-y: contain;
+      /* Safe area for notched phones */
+      padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    }
+    @keyframes dotPulse { 0%, 60%, 100% { transform: translateY(0); opacity: 0.5; } 30% { transform: translateY(-5px); opacity: 1; } }
+    @keyframes fadeUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes slideUp { from { opacity: 0; transform: translateY(40px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes celebPulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.02); } }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    input::placeholder { color: var(--text-muted); }
+    input:focus { outline: none; border-color: var(--accent) !important; }
+    ::-webkit-scrollbar { width: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    /* PWA install banner */
+    .install-banner { position: fixed; bottom: 0; left: 0; right: 0; padding: 12px 16px; background: linear-gradient(135deg, #1e293b, #0f172a); border-top: 1px solid var(--accent-border); z-index: 200; display: flex; align-items: center; gap: 12px; animation: slideUp 0.4s ease; }
+    .install-banner button { padding: 10px 20px; border-radius: 10px; border: none; font-weight: 700; font-family: var(--font-display); cursor: pointer; font-size: 14px; }
+    /* Prevent iOS zoom on input focus */
+    @media screen and (max-width: 768px) {
+      input, textarea, select { font-size: 16px !important; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- React from CDN -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+    /* ═══════════════════════════════════════════
+       CONFIG — Change these for your deployment
+       ═══════════════════════════════════════════ */
+    const CONFIG = {
+      // Replace with your Anthropic API key (use a proxy in production!)
+      // In production, NEVER expose API keys in frontend code.
+      // Use a backend proxy: /api/chat → your server → Anthropic API
+      API_ENDPOINT: "https://api.anthropic.com/v1/messages",
+      API_KEY: "", // SET VIA BACKEND PROXY IN PRODUCTION
+      MODEL: "claude-sonnet-4-20250514",
+      ADMIN_PASS: "monichat2026",
+      APP_NAME: "MoniChat",
+      APP_URL: "https://monichat.xyz",
+    };
+
+    /* ═══════════════════════════════════════════
+       STORAGE — localStorage wrapper
+       ═══════════════════════════════════════════ */
+    const SK = {
+      USER: "mc:user", MSGS: "mc:msgs", EXP: "mc:expenses", INC: "mc:income",
+      BUD: "mc:budgets", REM: "mc:reminders", STREAK: "mc:streak", NUDGE: "mc:nudge",
+    };
+    const LB_KEY = "mc:leaderboard";
+    const ADMIN_KEY = "mc:admin-profiles";
+
+    function sGet(key) {
+      try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : null; } catch { return null; }
+    }
+    function sSet(key, val) {
+      try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) { console.warn("Storage full:", e); }
+    }
+    function sDel(key) {
+      try { localStorage.removeItem(key); } catch {}
+    }
+
+    /* ═══════════════════════════════════════════
+       CATEGORIES & INCOME SOURCES
+       ═══════════════════════════════════════════ */
+    const CATS = [
+      { key: "food", label: "Food & Drinks", icon: "🍜", color: "#f59e0b" },
+      { key: "transport", label: "Transport", icon: "🚕", color: "#3b82f6" },
+      { key: "groceries", label: "Groceries", icon: "🛒", color: "#22c55e" },
+      { key: "bills", label: "Bills & Utilities", icon: "💡", color: "#ef4444" },
+      { key: "subscriptions", label: "Subscriptions", icon: "📺", color: "#8b5cf6" },
+      { key: "shopping", label: "Shopping", icon: "🛍️", color: "#ec4899" },
+      { key: "transfers", label: "Transfers/Gifts", icon: "🎁", color: "#f97316" },
+      { key: "health", label: "Health", icon: "💊", color: "#14b8a6" },
+      { key: "entertainment", label: "Entertainment", icon: "🎮", color: "#a855f7" },
+      { key: "housing", label: "Housing/Rent", icon: "🏠", color: "#6366f1" },
+      { key: "other", label: "Other", icon: "📦", color: "#64748b" },
+    ];
+    const QUICK_CATS = CATS.slice(0, 6);
+    const INC_SRCS = [
+      { key: "salary", label: "Salary", icon: "💼", color: "#22c55e" },
+      { key: "freelance", label: "Freelance", icon: "💻", color: "#14b8a6" },
+      { key: "business", label: "Business", icon: "🏪", color: "#3b82f6" },
+      { key: "investment", label: "Investment", icon: "📈", color: "#8b5cf6" },
+      { key: "gift", label: "Gift/Transfer", icon: "🎁", color: "#f59e0b" },
+      { key: "refund", label: "Refund", icon: "↩️", color: "#6366f1" },
+      { key: "side_hustle", label: "Side Hustle", icon: "🔥", color: "#f97316" },
+      { key: "other_income", label: "Other Income", icon: "💵", color: "#10b981" },
+    ];
+    function getCat(k) { return CATS.find(c => c.key === k?.toLowerCase()) || CATS[CATS.length - 1]; }
+    function getInc(k) { return INC_SRCS.find(s => s.key === k?.toLowerCase()) || INC_SRCS[INC_SRCS.length - 1]; }
+
+    /* ═══════════════════════════════════════════
+       MILESTONES
+       ═══════════════════════════════════════════ */
+    const MILESTONES = [
+      { days: 3, badge: "🌱", title: "Seedling", msg: "3 days in a row! Your financial awareness is sprouting." },
+      { days: 7, badge: "⭐", title: "One Week Strong", msg: "7-day streak! You're building a real habit." },
+      { days: 14, badge: "🔥", title: "Two Weeks", msg: "14 days straight! This is officially a habit." },
+      { days: 21, badge: "💎", title: "Three Weeks", msg: "21 days! Scientists say that's when habits stick." },
+      { days: 30, badge: "🏆", title: "Monthly Master", msg: "30-DAY STREAK! 🎉 A complete month of financial memory." },
+      { days: 60, badge: "👑", title: "Two-Month Legend", msg: "60 days! Deeper awareness than 99% of people." },
+      { days: 90, badge: "🦁", title: "Quarter Champion", msg: "90 DAYS! A full quarter of consistent tracking." },
+      { days: 180, badge: "🌟", title: "Half-Year Hero", msg: "180 days of financial memory. Inspirational." },
+      { days: 365, badge: "🎯", title: "Year One", msg: "365 days! A full year. Incredible discipline." },
+    ];
+    function getMilestone(n) { return MILESTONES.find(m => m.days === n); }
+    function getBadge(n) { let b = "🔥"; for (const m of MILESTONES) { if (n >= m.days) b = m.badge; } return b; }
+
+    /* ═══════════════════════════════════════════
+       NUDGE MESSAGES
+       ═══════════════════════════════════════════ */
+    const NUDGE_AM = [
+      "Good morning! ☀️ Ready to track today's spending? Even small stuff counts.",
+      "Rise and shine! 🌅 Got any expenses from yesterday?",
+      "Morning check-in! ☕ Let's start the day financially aware.",
+      "Hey! 🙌 Quick morning nudge — drop your expenses below.",
+    ];
+    const NUDGE_PM = [
+      "Evening wrap-up time! 🌙 Walk me through today's spending.",
+      "Day's winding down 📝 — let's capture today's expenses.",
+      "Hey! 💫 End-of-day check-in. What did you spend?",
+      "Quick evening recap! 🌆 Tell me about today's spending.",
+    ];
+
+    /* ═══════════════════════════════════════════
+       HELPERS
+       ═══════════════════════════════════════════ */
+    function parseTag(text, tag) {
+      const re = new RegExp(`<${tag}>(.*?)</${tag}>`, "gs");
+      const out = []; let m;
+      while ((m = re.exec(text)) !== null) { try { out.push(JSON.parse(m[1])); } catch {} }
+      return out;
+    }
+    function cleanText(t) {
+      return t.replace(/<expense>.*?<\/expense>/gs, "").replace(/<income>.*?<\/income>/gs, "").replace(/<budget>.*?<\/budget>/gs, "").replace(/<reminder>.*?<\/reminder>/gs, "").replace(/<nudge>.*?<\/nudge>/gs, "").replace(/<undo>.*?<\/undo>/gs, "").trim();
+    }
+    function fmtCur(a, c = "USD") { return new Intl.NumberFormat("en-US", { style: "currency", currency: c, minimumFractionDigits: a % 1 === 0 ? 0 : 2 }).format(a); }
+    function fmtDate(d) { try { return new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }); } catch { return d; } }
+    function daysAgo(d) { const diff = Math.floor((new Date() - new Date(d + "T12:00:00")) / 86400000); if (diff === 0) return "Today"; if (diff === 1) return "Yesterday"; if (diff < 7) return diff + "d ago"; return fmtDate(d); }
+    function td() { return new Date().toISOString().split("T")[0]; }
+    function tm() { return new Date().toISOString().slice(0, 7); }
+    function timeLabel(t) { const [h, m] = (t || "09:00").split(":").map(Number); return `${h % 12 || 12}:${m.toString().padStart(2, "0")} ${h >= 12 ? "PM" : "AM"}`; }
+    function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+
+    /* ═══════════════════════════════════════════
+       NOTIFICATION API — real push nudges
+       ═══════════════════════════════════════════ */
+    async function requestNotifPermission() {
+      if (!("Notification" in window)) return "unsupported";
+      if (Notification.permission === "granted") return "granted";
+      return await Notification.requestPermission();
+    }
+
+    function sendLocalNotif(title, body) {
+      if (Notification.permission !== "granted") return;
+      try {
+        if ("serviceWorker" in navigator && navigator.serviceWorker.controller) {
+          navigator.serviceWorker.ready.then(reg => {
+            reg.showNotification(title, {
+              body, icon: "/icons/icon-192.png", badge: "/icons/icon-192.png",
+              tag: "nudge-" + Date.now(), vibrate: [200, 100, 200],
+              actions: [{ action: "log", title: "Log Now" }, { action: "later", title: "Later" }],
+            });
+          });
+        } else {
+          new Notification(title, { body, icon: "/icons/icon-192.png" });
+        }
+      } catch (e) { console.warn("Notification error:", e); }
+    }
+
+    /* ═══════════════════════════════════════════
+       SYSTEM PROMPT
+       ═══════════════════════════════════════════ */
+    function buildCtx(user, expenses, income, budgets, reminders, nudge) {
+      const tm_ = tm();
+      const mE = expenses.filter(e => e.date?.startsWith(tm_));
+      const mI = income.filter(e => e.date?.startsWith(tm_));
+      const totE = mE.reduce((s, e) => s + e.amount, 0);
+      const totI = mI.reduce((s, e) => s + e.amount, 0);
+      const byCat = {}; mE.forEach(e => { byCat[e.category] = (byCat[e.category] || 0) + e.amount; });
+      const byInc = {}; mI.forEach(e => { byInc[e.source] = (byInc[e.source] || 0) + e.amount; });
+      const ni = nudge?.enabled ? `Nudge: ${nudge.time1||"09:00"} & ${nudge.time2||"20:00"} (${nudge.paused?"PAUSED":"ACTIVE"})` : "Nudges off";
+
+      return `You are MoniChat — a warm, smart personal finance companion that maintains a user's "financial memory."
+
+USER: ${user?.name||"Friend"} | ${user?.currency||"USD"} | Joined: ${user?.joined||"today"} | ${ni}
+MONTH (${tm_}): Income $${totI.toFixed(2)} | Spent $${totE.toFixed(2)} | Net $${(totI-totE).toFixed(2)}
+Spending: ${JSON.stringify(byCat)} | Income: ${JSON.stringify(byInc)}
+Budgets: ${JSON.stringify(budgets)} | Reminders: ${reminders.filter(r=>r.active).map(r=>r.title).join(", ")||"none"}
+Recent: ${JSON.stringify(expenses.slice(-20))}
+Recent Income: ${JSON.stringify(income.slice(-15))}
+
+EXTRACTION — include structured tags:
+EXPENSE: <expense>{"amount":NUM,"category":"KEY","description":"DESC","date":"YYYY-MM-DD"}</expense>
+Categories: food,transport,groceries,bills,subscriptions,shopping,transfers,health,entertainment,housing,other
+INCOME: <income>{"amount":NUM,"source":"KEY","description":"DESC","date":"YYYY-MM-DD"}</income>
+Sources: salary,freelance,business,investment,gift,refund,side_hustle,other_income
+BUDGET: <budget>{"category":"KEY","amount":NUM}</budget>
+REMINDER: <reminder>{"title":"DESC","schedule":"SCHEDULE"}</reminder>
+NUDGE: <nudge>{"time1":"HH:MM","time2":"HH:MM","enabled":true,"paused":false}</nudge>
+UNDO: <undo>last</undo>
+
+RULES: Warm, casual, concise (2-4 sentences). Support "k" notation, relative dates, multi-item. Never preachy. Today: ${td()}
+Tags are invisible — clean text must work without them.`;
+    }
+
+    /* ═══════════════════════════════════════════
+       WEEKLY SUMMARY & DAY RECAP
+       ═══════════════════════════════════════════ */
+    function weekSummary(expenses, income, streak, cur, name) {
+      const now = new Date(), ws = new Date(now); ws.setDate(now.getDate() - 7);
+      const wsS = ws.toISOString().split("T")[0], weS = td();
+      const wE = expenses.filter(e => e.date >= wsS && e.date <= weS);
+      const wI = income.filter(e => e.date >= wsS && e.date <= weS);
+      const tE = wE.reduce((s,e)=>s+e.amount,0), tI = wI.reduce((s,e)=>s+e.amount,0), net = tI - tE;
+      const pw = new Date(ws); pw.setDate(pw.getDate()-7); const pwS = pw.toISOString().split("T")[0];
+      const prevT = expenses.filter(e=>e.date>=pwS&&e.date<wsS).reduce((s,e)=>s+e.amount,0);
+      const pct = prevT>0?((tE-prevT)/prevT*100).toFixed(0):null;
+      const byCat = {}; wE.forEach(e=>{byCat[e.category]=(byCat[e.category]||0)+e.amount;});
+      const top = Object.entries(byCat).sort((a,b)=>b[1]-a[1]).slice(0,3);
+      const big = wE.length>0?wE.reduce((a,b)=>a.amount>b.amount?a:b):null;
+      let msg = `📊 WEEKLY FINANCIAL MEMORY — ${fmtDate(wsS)} to ${fmtDate(weS)}\n\nHey ${name}!\n\n💰 Income: ${fmtCur(tI,cur)}\n💸 Spent: ${fmtCur(tE,cur)}`;
+      if(pct!==null) msg+=` (${Number(pct)>0?"↑":"↓"}${Math.abs(Number(pct))}% vs last week)`;
+      msg+=`\n${net>=0?"✅":"⚠️"} Net: ${net>=0?"+":""}${fmtCur(net,cur)}\n\n`;
+      if(top.length){msg+="📋 Top categories:\n";top.forEach(([k,a])=>{const c=getCat(k);msg+=`  ${c.icon} ${c.label}: ${fmtCur(a,cur)} (${tE>0?(a/tE*100).toFixed(0):0}%)\n`;});msg+="\n";}
+      if(big) msg+=`💥 Biggest: ${fmtCur(big.amount,cur)} — "${big.description}"\n\n`;
+      msg+=`${getBadge(streak.count)} Streak: ${streak.count}d\n📝 ${wE.length} expenses, ${wI.length} income\n\n`;
+      msg+=net>=0?`Great week! You saved ${fmtCur(net,cur)}. 💪`:`Spending exceeded income. Small changes help — you've got this! 🤝`;
+      return msg;
+    }
+
+    function dayRecap(expenses, cur) {
+      const todayExp = expenses.filter(e => e.date === td());
+      if (!todayExp.length) return "Evening wrap-up! 🌙 Nothing logged today. Coffee? Transport? Lunch? What'd you spend?";
+      const total = todayExp.reduce((s,e)=>s+e.amount,0);
+      let msg = "Evening recap! 🌙 Here's what I have for today:\n\n";
+      todayExp.forEach(e=>{const c=getCat(e.category);msg+=`  ${c.icon} ${e.description}: ${fmtCur(e.amount,cur)}\n`;});
+      msg+=`\n📊 Total: ${fmtCur(total,cur)}\n\nAnything else, or are we good? Just say "good" to close out.`;
+      return msg;
+    }
+
+    /* ═══════════════════════════════════════════
+       SMALL COMPONENTS
+       ═══════════════════════════════════════════ */
+    function ExpPill({exp,cur}){const c=getCat(exp.category);return(<div style={{display:"inline-flex",alignItems:"center",gap:6,padding:"4px 12px 4px 8px",borderRadius:20,background:`${c.color}15`,border:`1px solid ${c.color}30`,marginTop:6,marginRight:6,fontSize:12,fontWeight:600,color:c.color}}><span>{c.icon}</span><span>{fmtCur(exp.amount,cur)}</span><span style={{opacity:0.5}}>·</span><span style={{fontWeight:400}}>{exp.description}</span></div>);}
+    function IncPill({inc,cur}){const s=getInc(inc.source);return(<div style={{display:"inline-flex",alignItems:"center",gap:6,padding:"4px 12px 4px 8px",borderRadius:20,background:"rgba(34,197,94,0.1)",border:"1px solid rgba(34,197,94,0.25)",marginTop:6,marginRight:6,fontSize:12,fontWeight:600,color:"#22c55e"}}><span>{s.icon}</span><span>+{fmtCur(inc.amount,cur)}</span><span style={{opacity:0.5}}>·</span><span style={{fontWeight:400}}>{inc.description}</span></div>);}
+    function RemPill({rem}){return(<div style={{display:"inline-flex",alignItems:"center",gap:6,padding:"4px 12px",borderRadius:20,background:"rgba(59,130,246,0.1)",border:"1px solid rgba(59,130,246,0.25)",marginTop:6,fontSize:12,color:"#60a5fa"}}><span>🔔</span><span>{rem.title}</span>{rem.schedule&&<span style={{opacity:0.6}}>· {rem.schedule}</span>}</div>);}
+
+    function QuickLogBar({onSelect}){return(
+      <div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:10}}>
+        {QUICK_CATS.map(c=>(<button key={c.key} onClick={()=>onSelect(c)} style={{display:"flex",alignItems:"center",gap:4,padding:"6px 12px",borderRadius:16,border:`1px solid ${c.color}30`,background:`${c.color}10`,color:c.color,fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"var(--font)"}}><span>{c.icon}</span><span>{c.label}</span></button>))}
+      </div>
+    );}
+
+    /* ═══════════════════════════════════════════
+       ONBOARDING
+       ═══════════════════════════════════════════ */
+    function Onboarding({onDone}) {
+      const [step,setStep]=useState(0);
+      const [name,setName]=useState("");
+      const [ident,setIdent]=useState("");
+      const [cur,setCur]=useState("USD");
+      const [n1,setN1]=useState("09:00");
+      const [n2,setN2]=useState("20:00");
+      const currencies=["USD","NGN","GBP","EUR","CAD","KES","GHS","ZAR"];
+
+      const finish=async()=>{
+        // Request notification permission
+        await requestNotifPermission();
+        onDone({name:name.trim()||"Friend",identifier:ident.trim(),currency:cur,joined:td()},
+          {enabled:true,paused:false,time1:n1,time2:n2,lastFired:{}});
+      };
+
+      const is=inputStyle, bp=btnPrimary;
+      return(
+        <div style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:"100vh",background:"var(--bg-deep)",padding:20,fontFamily:"var(--font)"}}>
+          <div style={{width:"100%",maxWidth:440,animation:"fadeUp 0.5s ease"}}>
+            <div style={{textAlign:"center",marginBottom:36}}>
+              <div style={{fontSize:52,marginBottom:8,filter:"drop-shadow(0 4px 20px rgba(245,158,11,0.3))"}}>💸</div>
+              <h1 style={{fontSize:38,fontWeight:800,fontFamily:"var(--font-display)",color:"var(--accent)",margin:0,letterSpacing:"-1px"}}>MoniChat</h1>
+              <p style={{color:"var(--text-muted)",fontSize:15,marginTop:6,lineHeight:1.5}}>Your financial memory.<br/>Track spending through conversation.</p>
+            </div>
+            <div style={{display:"flex",justifyContent:"center",gap:8,marginBottom:32,flexWrap:"wrap"}}>
+              {[{i:"🧠",t:"Financial Memory"},{i:"📊",t:"Smart Insights"},{i:"🔔",t:"Daily Nudges"},{i:"🔥",t:"Habit Streaks"}].map(f=>(<div key={f.t} style={{display:"flex",alignItems:"center",gap:5,padding:"5px 12px",borderRadius:20,background:"var(--surface)",border:"1px solid var(--border)",fontSize:12,color:"var(--text-secondary)"}}><span>{f.i}</span><span>{f.t}</span></div>))}
+            </div>
+            <div style={{display:"flex",justifyContent:"center",gap:6,marginBottom:24}}>
+              {[0,1,2].map(s=>(<div key={s} style={{width:s===step?24:8,height:8,borderRadius:4,background:s<=step?"var(--accent)":"var(--border)",transition:"all 0.3s"}}/>))}
+            </div>
+            {step===0&&(<div style={{display:"flex",flexDirection:"column",gap:12,animation:"fadeUp 0.3s ease"}}>
+              <input value={name} onChange={e=>setName(e.target.value)} placeholder="What should I call you?" style={is}/>
+              <input value={ident} onChange={e=>setIdent(e.target.value)} placeholder="Email or phone number" onKeyDown={e=>e.key==="Enter"&&ident.trim()&&setStep(1)} style={is}/>
+              <button onClick={()=>ident.trim()&&setStep(1)} disabled={!ident.trim()} style={{...bp,opacity:ident.trim()?1:0.4}}>Continue →</button>
+            </div>)}
+            {step===1&&(<div style={{animation:"fadeUp 0.3s ease"}}>
+              <p style={{color:"var(--text-secondary)",fontSize:14,marginBottom:16,textAlign:"center"}}>What currency do you use most?</p>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:20}}>
+                {currencies.map(c=>(<button key={c} onClick={()=>setCur(c)} style={{padding:"10px 0",borderRadius:12,border:cur===c?"2px solid var(--accent)":"1px solid var(--border)",background:cur===c?"var(--accent-soft)":"var(--surface)",color:cur===c?"var(--accent)":"var(--text-secondary)",fontWeight:cur===c?700:400,fontSize:14,cursor:"pointer",fontFamily:"var(--font)"}}>{c}</button>))}
+              </div>
+              <button onClick={()=>setStep(2)} style={bp}>Continue →</button>
+            </div>)}
+            {step===2&&(<div style={{animation:"fadeUp 0.3s ease"}}>
+              <div style={{textAlign:"center",marginBottom:20}}>
+                <div style={{fontSize:32,marginBottom:8}}>🔔</div>
+                <p style={{color:"var(--text-secondary)",fontSize:14,lineHeight:1.5}}>I'll nudge you <strong style={{color:"var(--accent)"}}>twice daily</strong> to log expenses.</p>
+              </div>
+              <div style={{display:"flex",flexDirection:"column",gap:16,marginBottom:24}}>
+                {[{l:"☀️ Morning",v:n1,s:setN1},{l:"🌙 Evening",v:n2,s:setN2}].map(n=>(
+                  <div key={n.l} style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:16,padding:16,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <div style={{fontSize:14,fontWeight:600,color:"var(--text-primary)"}}>{n.l}</div>
+                    <input type="time" value={n.v} onChange={e=>n.s(e.target.value)} style={{...is,width:120,padding:"8px 12px",fontSize:14,textAlign:"center",background:"var(--surface-raised)"}}/>
+                  </div>
+                ))}
+              </div>
+              <button onClick={finish} style={bp}>Start Tracking 🚀</button>
+            </div>)}
+            <p style={{textAlign:"center",fontSize:11,color:"var(--text-muted)",marginTop:20}}>No bank linking. Your data stays on your device.</p>
+          </div>
+        </div>
+      );
+    }
+
+    /* ═══════════════════════════════════════════
+       NUDGE SETTINGS PANEL
+       ═══════════════════════════════════════════ */
+    function NudgePanel({nudge,onChange,onClose}) {
+      const [t1,setT1]=useState(nudge?.time1||"09:00"),[t2,setT2]=useState(nudge?.time2||"20:00");
+      const [en,setEn]=useState(nudge?.enabled!==false),[pa,setPa]=useState(nudge?.paused||false);
+      const save=()=>{onChange({...nudge,time1:t1,time2:t2,enabled:en,paused:pa});onClose();};
+      return(
+        <div style={{position:"absolute",inset:0,zIndex:50,background:"var(--bg-deep)",overflowY:"auto",animation:"slideUp 0.35s ease"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"16px 20px",borderBottom:"1px solid var(--border)",position:"sticky",top:0,background:"var(--bg-deep)",zIndex:2}}>
+            <h2 style={{margin:0,fontSize:18,fontFamily:"var(--font-display)",color:"var(--text-primary)"}}>🔔 Nudge Settings</h2>
+            <button onClick={onClose} style={closeBtn}>✕</button>
+          </div>
+          <div style={{padding:20}}>
+            <p style={{color:"var(--text-secondary)",fontSize:14,lineHeight:1.6,marginBottom:24}}>Two daily nudges keep your financial memory sharp.</p>
+            {[{l:"Daily Nudges",sub:en?"Active":"Disabled",v:en,fn:()=>setEn(!en),c:"var(--accent)"},
+              ...(en?[{l:"Paused",sub:pa?"Paused":"Running",v:pa,fn:()=>setPa(!pa),c:"#ef4444"}]:[])
+            ].map(t=>(<div key={t.l} onClick={t.fn} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"14px 16px",borderRadius:14,background:"var(--surface)",border:"1px solid var(--border)",marginBottom:12,cursor:"pointer"}}>
+              <div><div style={{fontSize:14,fontWeight:600,color:"var(--text-primary)"}}>{t.l}</div><div style={{fontSize:12,color:"var(--text-muted)"}}>{t.sub}</div></div>
+              <div style={{width:48,height:28,borderRadius:14,background:t.v?t.c:"var(--border)",padding:3,transition:"background 0.2s"}}><div style={{width:22,height:22,borderRadius:11,background:"white",transition:"transform 0.2s",transform:t.v?"translateX(20px)":"translateX(0)"}}/></div>
+            </div>))}
+            {en&&(<div style={{display:"flex",flexDirection:"column",gap:12,margin:"12px 0 24px"}}>
+              {[{l:"☀️ Morning",v:t1,s:setT1},{l:"🌙 Evening",v:t2,s:setT2}].map(x=>(
+                <div key={x.l} style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:16,padding:16,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div><div style={{fontSize:14,fontWeight:600,color:"var(--text-primary)"}}>{x.l}</div><div style={{fontSize:12,color:"var(--text-muted)"}}>Currently: {timeLabel(x.v)}</div></div>
+                  <input type="time" value={x.v} onChange={e=>x.s(e.target.value)} style={{...inputStyle,width:120,padding:"8px 12px",fontSize:14,textAlign:"center",background:"var(--surface-raised)"}}/>
+                </div>
+              ))}
+            </div>)}
+            <button onClick={save} style={btnPrimary}>Save Settings</button>
+          </div>
+        </div>
+      );
+    }
+
+    /* ═══════════════════════════════════════════
+       LEADERBOARD
+       ═══════════════════════════════════════════ */
+    function Leaderboard({entries,currentUser,onClose}) {
+      const sorted=[...entries].sort((a,b)=>b.streak-a.streak);
+      const rank=sorted.findIndex(e=>e.name===currentUser)+1;
+      return(
+        <div style={{position:"absolute",inset:0,zIndex:50,background:"var(--bg-deep)",overflowY:"auto",animation:"slideUp 0.35s ease"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"16px 20px",borderBottom:"1px solid var(--border)",position:"sticky",top:0,background:"var(--bg-deep)",zIndex:2}}>
+            <h2 style={{margin:0,fontSize:18,fontFamily:"var(--font-display)",color:"var(--text-primary)"}}>🏆 Streak Leaderboard</h2>
+            <button onClick={onClose} style={closeBtn}>✕</button>
+          </div>
+          <div style={{padding:20}}>
+            {rank>0&&(<div style={{textAlign:"center",padding:20,borderRadius:16,background:"linear-gradient(135deg, rgba(245,158,11,0.1), rgba(34,197,94,0.05))",border:"1px solid var(--accent-border)",marginBottom:24}}>
+              <div style={{fontSize:12,color:"var(--text-muted)",textTransform:"uppercase",letterSpacing:1}}>Your Rank</div>
+              <div style={{fontSize:42,fontWeight:800,fontFamily:"var(--font-display)",color:"var(--accent)",margin:"4px 0"}}>#{rank}</div>
+              <div style={{fontSize:13,color:"var(--text-secondary)"}}>out of {sorted.length}</div>
+            </div>)}
+            {sorted.map((e,i)=>{const me=e.name===currentUser;const medal=i<3?["🥇","🥈","🥉"][i]:`#${i+1}`;return(
+              <div key={i} style={{display:"flex",alignItems:"center",gap:12,padding:"12px 14px",borderRadius:14,background:me?"var(--accent-soft)":"var(--surface)",border:`1px solid ${me?"var(--accent-border)":"var(--border)"}`,marginBottom:8}}>
+                <div style={{fontSize:20,width:36,textAlign:"center"}}>{typeof medal==="string"&&medal.startsWith("#")?<span style={{fontSize:14,color:"var(--text-muted)",fontWeight:700}}>{medal}</span>:medal}</div>
+                <div style={{flex:1}}><div style={{fontSize:14,fontWeight:me?700:500,color:me?"var(--accent)":"var(--text-primary)"}}>{getBadge(e.streak)} {e.name}{me?" (you)":""}</div></div>
+                <div style={{fontSize:16,fontWeight:800,fontFamily:"var(--font-display)",color:e.streak>=30?"#22c55e":e.streak>=7?"var(--accent)":"var(--text-secondary)"}}>{e.streak}d</div>
+              </div>
+            );})}
+            {sorted.length===0&&<p style={{color:"var(--text-muted)",fontSize:14,textAlign:"center"}}>No trackers yet. Start your streak!</p>}
+          </div>
+        </div>
+      );
+    }
+
+    /* ═══════════════════════════════════════════
+       ADMIN DASHBOARD
+       ═══════════════════════════════════════════ */
+    function AdminDash({onClose}) {
+      const [authed,setAuthed]=useState(false);
+      const [pass,setPass]=useState("");
+      const [profiles,setProfiles]=useState([]);
+      const [sortBy,setSortBy]=useState("streak");
+      const [sortDir,setSortDir]=useState("desc");
+      const [tab,setTab]=useState("overview");
+
+      useEffect(()=>{if(!authed)return;const load=()=>{setProfiles(sGet(ADMIN_KEY)||[]);};load();const id=setInterval(load,15000);return()=>clearInterval(id);},[authed]);
+
+      if(!authed){return(
+        <div style={{position:"absolute",inset:0,zIndex:60,background:"var(--bg-deep)",display:"flex",alignItems:"center",justifyContent:"center",animation:"slideUp 0.35s ease"}}>
+          <div style={{width:"100%",maxWidth:360,padding:20}}>
+            <div style={{textAlign:"center",marginBottom:30}}><div style={{fontSize:42,marginBottom:10}}>🔐</div><h2 style={{fontSize:22,fontFamily:"var(--font-display)",color:"var(--text-primary)",marginBottom:6}}>Admin Access</h2></div>
+            <input type="password" value={pass} onChange={e=>setPass(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){if(pass===CONFIG.ADMIN_PASS)setAuthed(true);else{setPass("");}}}} placeholder="Passcode" style={{...inputStyle,textAlign:"center",fontSize:18,letterSpacing:4,marginBottom:16}}/>
+            <button onClick={()=>{if(pass===CONFIG.ADMIN_PASS)setAuthed(true);else setPass("");}} style={btnPrimary}>Unlock</button>
+            <button onClick={onClose} style={{width:"100%",padding:12,background:"transparent",border:"1px solid var(--border)",borderRadius:13,color:"var(--text-muted)",fontSize:14,cursor:"pointer",fontFamily:"var(--font)",marginTop:10}}>Cancel</button>
+          </div>
+        </div>
+      );}
+
+      const tot=profiles.length;
+      const act=profiles.filter(p=>p.lastActive===td()).length;
+      const act7=profiles.filter(p=>{if(!p.lastActive)return false;return(Date.now()-new Date(p.lastActive+"T12:00:00"))<7*864e5;}).length;
+      const avgStr=tot>0?(profiles.reduce((s,p)=>s+(p.streak||0),0)/tot).toFixed(1):0;
+      const maxStr=profiles.reduce((m,p)=>Math.max(m,p.streak||0),0);
+      const nudgeAd=tot>0?(profiles.filter(p=>p.nudgeEnabled).length/tot*100).toFixed(0):0;
+      const totTx=profiles.reduce((s,p)=>s+(p.totalExpenses||0)+(p.totalIncome||0),0);
+      const globalCats={};profiles.forEach(p=>{if(p.categoryBreakdown)Object.entries(p.categoryBreakdown).forEach(([k,v])=>{globalCats[k]=(globalCats[k]||0)+v;});});
+      const sortedGC=Object.entries(globalCats).sort((a,b)=>b[1]-a[1]);const gcTotal=sortedGC.reduce((s,[,v])=>s+v,0);
+
+      const sorted=[...profiles].sort((a,b)=>{let av,bv;
+        if(sortBy==="streak"){av=a.streak||0;bv=b.streak||0;}
+        else if(sortBy==="spend"){av=a.monthlySpend||0;bv=b.monthlySpend||0;}
+        else if(sortBy==="active"){av=a.lastActive||"";bv=b.lastActive||"";}
+        else{av=a.joined||"";bv=b.joined||"";}
+        return sortDir==="desc"?(bv>av?1:-1):(av>bv?1:-1);
+      });
+      const togSort=c=>{if(sortBy===c)setSortDir(sortDir==="desc"?"asc":"desc");else{setSortBy(c);setSortDir("desc");}};
+
+      const mc=(l,v,s,c)=>(<div style={{padding:16,borderRadius:14,background:"var(--surface)",border:"1px solid var(--border)",textAlign:"center"}}>
+        <div style={{fontSize:11,color:"var(--text-muted)",textTransform:"uppercase",letterSpacing:0.5}}>{l}</div>
+        <div style={{fontSize:26,fontWeight:800,fontFamily:"var(--font-display)",color:c||"var(--text-primary)",marginTop:4}}>{v}</div>
+        {s&&<div style={{fontSize:11,color:"var(--text-muted)",marginTop:2}}>{s}</div>}
+      </div>);
+
+      return(
+        <div style={{position:"absolute",inset:0,zIndex:60,background:"var(--bg-deep)",overflowY:"auto",animation:"slideUp 0.35s ease"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"16px 20px",borderBottom:"1px solid var(--border)",position:"sticky",top:0,background:"var(--bg-deep)",zIndex:2}}>
+            <div><h2 style={{margin:0,fontSize:18,fontFamily:"var(--font-display)",color:"var(--text-primary)"}}>⚙️ Admin Dashboard</h2>
+            <div style={{fontSize:11,color:"var(--text-muted)",marginTop:2}}>{tot} users · {new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}</div></div>
+            <button onClick={onClose} style={closeBtn}>✕</button>
+          </div>
+          <div style={{display:"flex",borderBottom:"1px solid var(--border)",padding:"0 20px"}}>
+            {["overview","users","engagement"].map(t=>(<button key={t} onClick={()=>setTab(t)} style={{padding:"12px 20px",fontSize:13,fontWeight:tab===t?700:400,color:tab===t?"var(--accent)":"var(--text-muted)",background:"transparent",border:"none",borderBottom:tab===t?"2px solid var(--accent)":"2px solid transparent",cursor:"pointer",fontFamily:"var(--font)",textTransform:"capitalize"}}>{t}</button>))}
+          </div>
+          <div style={{padding:20}}>
+            {tab==="overview"&&(<>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:12,marginBottom:24}}>
+                {mc("Total Users",tot,`${act} today`,"var(--accent)")}
+                {mc("Avg Streak",avgStr+"d",`Max: ${maxStr}d`,"#f59e0b")}
+                {mc("Active 7d",act7,`${tot>0?(act7/tot*100).toFixed(0):0}%`,"#22c55e")}
+                {mc("Total Txns",totTx.toLocaleString(),`${tot>0?(totTx/tot).toFixed(0):0}/user`,"#3b82f6")}
+              </div>
+              {mc("Nudge Adoption",nudgeAd+"%","enabled","var(--accent)")}
+              {sortedGC.length>0&&<div style={{marginTop:24}}><h3 style={secTitle}>🌍 Global Categories</h3>
+                {sortedGC.slice(0,8).map(([k,a])=>{const c=getCat(k);const p=gcTotal>0?(a/gcTotal*100):0;return(<div key={k} style={{marginBottom:10}}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}><span style={{fontSize:13,color:"var(--text-secondary)"}}>{c.icon} {c.label}</span><span style={{fontSize:12,color:"var(--text-muted)"}}>{p.toFixed(1)}%</span></div>
+                  <div style={{height:4,background:"var(--surface-raised)",borderRadius:2,overflow:"hidden"}}><div style={{width:`${Math.min(p,100)}%`,height:"100%",background:c.color,borderRadius:2}}/></div>
+                </div>);})}
+              </div>}
+            </>)}
+            {tab==="users"&&(<>
+              <div style={{display:"flex",gap:6,marginBottom:16,flexWrap:"wrap"}}>
+                {["streak","spend","active","joined"].map(s=>(<button key={s} onClick={()=>togSort(s)} style={{padding:"6px 14px",borderRadius:8,border:`1px solid ${sortBy===s?"var(--accent-border)":"var(--border)"}`,background:sortBy===s?"var(--accent-soft)":"var(--surface)",color:sortBy===s?"var(--accent)":"var(--text-muted)",fontSize:12,fontWeight:sortBy===s?700:400,cursor:"pointer",fontFamily:"var(--font)",textTransform:"capitalize"}}>{s} {sortBy===s&&(sortDir==="desc"?"↓":"↑")}</button>))}
+              </div>
+              {sorted.map((p,i)=>{const tc=getCat(p.topCategory);const on=p.lastActive===td();return(
+                <div key={i} style={{padding:16,borderRadius:14,background:"var(--surface)",border:`1px solid ${on?"rgba(34,197,94,0.25)":"var(--border)"}`,marginBottom:10}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+                    <div>
+                      <div style={{fontSize:15,fontWeight:700,color:"var(--text-primary)",display:"flex",alignItems:"center",gap:6}}>
+                        {p.badge} {p.name}
+                        {on&&<span style={{fontSize:10,padding:"2px 8px",borderRadius:6,background:"rgba(34,197,94,0.15)",color:"#22c55e",fontWeight:600}}>ACTIVE</span>}
+                      </div>
+                      <div style={{fontSize:11,color:"var(--text-muted)",marginTop:2}}>{(p.uid||"").slice(0,3)}***{(p.uid||"").slice(-3)} · {p.currency} · {fmtDate(p.joined)}</div>
+                    </div>
+                    <div style={{textAlign:"right"}}><div style={{fontSize:20,fontWeight:800,fontFamily:"var(--font-display)",color:p.streak>=30?"#22c55e":p.streak>=7?"var(--accent)":"var(--text-secondary)"}}>{p.streak}d</div></div>
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
+                    {[{l:"Spend",v:p.monthlySpend>0?fmtCur(p.monthlySpend,p.currency):"—"},{l:"Income",v:p.monthlyIncome>0?fmtCur(p.monthlyIncome,p.currency):"—"},{l:"Top Cat",v:p.topCategory?`${tc.icon}`:""},{l:"Days",v:p.daysActive||0}].map(s=>(<div key={s.l} style={{textAlign:"center"}}><div style={{fontSize:10,color:"var(--text-muted)"}}>{s.l}</div><div style={{fontSize:12,fontWeight:600,color:"var(--text-secondary)"}}>{s.v}</div></div>))}
+                  </div>
+                </div>
+              );})}
+            </>)}
+            {tab==="engagement"&&(<>
+              <h3 style={secTitle}>🔥 Streak Distribution</h3>
+              {[{l:"0 (inactive)",mn:0,mx:0,c:"#64748b"},{l:"1-3d",mn:1,mx:3,c:"#ef4444"},{l:"4-7d",mn:4,mx:7,c:"#f97316"},{l:"8-14d",mn:8,mx:14,c:"#f59e0b"},{l:"15-30d",mn:15,mx:30,c:"#22c55e"},{l:"30d+",mn:31,mx:Infinity,c:"#14b8a6"}].map(b=>{
+                const n=profiles.filter(p=>(p.streak||0)>=b.mn&&(p.streak||0)<=b.mx).length;
+                const p=tot>0?(n/tot*100).toFixed(0):0;
+                return(<div key={b.l} style={{marginBottom:10}}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}><span style={{fontSize:13,color:"var(--text-secondary)"}}>{b.l}</span><span style={{fontSize:12,color:"var(--text-muted)"}}>{n} ({p}%)</span></div>
+                  <div style={{height:6,background:"var(--surface-raised)",borderRadius:3,overflow:"hidden"}}><div style={{width:`${Math.min(Number(p),100)}%`,height:"100%",background:b.c,borderRadius:3}}/></div>
+                </div>);
+              })}
+              <h3 style={{...secTitle,marginTop:24}}>📊 Feature Adoption</h3>
+              {[{l:"Nudges",n:profiles.filter(p=>p.nudgeEnabled).length,c:"var(--accent)"},{l:"Budgets",n:profiles.filter(p=>(p.budgetsSet||0)>0).length,c:"#8b5cf6"},{l:"Income Tracking",n:profiles.filter(p=>(p.totalIncome||0)>0).length,c:"#22c55e"},{l:"10+ Txns",n:profiles.filter(p=>(p.totalExpenses||0)>=10).length,c:"#14b8a6"}].map(f=>{
+                const p=tot>0?(f.n/tot*100):0;
+                return(<div key={f.l} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 14px",borderRadius:12,background:"var(--surface)",border:"1px solid var(--border)",marginBottom:8}}>
+                  <div style={{flex:1}}><div style={{fontSize:13,color:"var(--text-primary)"}}>{f.l}</div><div style={{height:3,background:"var(--surface-raised)",borderRadius:2,overflow:"hidden",marginTop:6}}><div style={{width:`${p}%`,height:"100%",background:f.c,borderRadius:2}}/></div></div>
+                  <div style={{textAlign:"right"}}><div style={{fontSize:16,fontWeight:700,color:f.c}}>{p.toFixed(0)}%</div><div style={{fontSize:10,color:"var(--text-muted)"}}>{f.n}/{tot}</div></div>
+                </div>);
+              })}
+            </>)}
+          </div>
+        </div>
+      );
+    }
+
+    /* ═══════════════════════════════════════════
+       DASHBOARD
+       ═══════════════════════════════════════════ */
+    function Dashboard({expenses,income,budgets,reminders,currency,streak,userName,onClose,onShare}) {
+      const m=tm();
+      const mE=expenses.filter(e=>e.date?.startsWith(m));
+      const mI=income.filter(e=>e.date?.startsWith(m));
+      const tE=mE.reduce((s,e)=>s+e.amount,0),tI=mI.reduce((s,e)=>s+e.amount,0),net=tI-tE;
+      const byCat={};mE.forEach(e=>{byCat[e.category||"other"]=(byCat[e.category||"other"]||0)+e.amount;});
+      const sCats=Object.entries(byCat).sort((a,b)=>b[1]-a[1]);
+      const bySrc={};mI.forEach(e=>{bySrc[e.source||"other_income"]=(bySrc[e.source||"other_income"]||0)+e.amount;});
+      const sSrcs=Object.entries(bySrc).sort((a,b)=>b[1]-a[1]);
+      const allTx=[...expenses.map(e=>({...e,type:"expense"})),...income.map(e=>({...e,type:"income"}))].sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+      const ml=new Date().toLocaleString("default",{month:"long",year:"numeric"});
+
+      return(
+        <div style={{position:"absolute",inset:0,zIndex:50,background:"var(--bg-deep)",overflowY:"auto",animation:"slideUp 0.35s ease"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"16px 20px",borderBottom:"1px solid var(--border)",position:"sticky",top:0,background:"var(--bg-deep)",zIndex:2}}>
+            <h2 style={{margin:0,fontSize:18,fontFamily:"var(--font-display)",color:"var(--text-primary)"}}>📊 Dashboard</h2>
+            <div style={{display:"flex",gap:8}}><button onClick={onShare} style={{...closeBtn,fontSize:14}} title="Share">📤</button><button onClick={onClose} style={closeBtn}>✕</button></div>
+          </div>
+          <div style={{padding:20}}>
+            <div style={{padding:24,borderRadius:20,background:net>=0?"linear-gradient(135deg, rgba(34,197,94,0.1), rgba(20,184,166,0.05))":"linear-gradient(135deg, rgba(239,68,68,0.1), rgba(245,158,11,0.05))",border:`1px solid ${net>=0?"rgba(34,197,94,0.2)":"rgba(239,68,68,0.2)"}`,textAlign:"center",marginBottom:16}}>
+              <div style={{fontSize:12,color:"var(--text-muted)",textTransform:"uppercase",letterSpacing:1}}>Net Flow · {ml}</div>
+              <div style={{fontSize:36,fontWeight:800,fontFamily:"var(--font-display)",color:net>=0?"#22c55e":"#ef4444",margin:"8px 0"}}>{net>=0?"+":""}{fmtCur(net,currency)}</div>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:24}}>
+              {[{l:"Income",t:tI,c:"#22c55e",n:mI.length},{l:"Expenses",t:tE,c:"var(--accent)",n:mE.length}].map(d=>(<div key={d.l} style={{padding:16,borderRadius:16,background:"var(--surface)",border:"1px solid var(--border)",textAlign:"center"}}>
+                <div style={{fontSize:11,color:"var(--text-muted)",textTransform:"uppercase"}}>{d.l}</div>
+                <div style={{fontSize:22,fontWeight:700,fontFamily:"var(--font-display)",color:d.c,marginTop:4}}>{fmtCur(d.t,currency)}</div>
+                <div style={{fontSize:11,color:"var(--text-muted)",marginTop:2}}>{d.n} entries</div>
+              </div>))}
+            </div>
+            {/* Categories */}
+            {sCats.length>0&&<div style={{marginBottom:24}}><h3 style={secTitle}>🛒 Spending by Category</h3>
+              {sCats.map(([k,a])=>{const c=getCat(k);const p=tE>0?(a/tE*100):0;const bud=budgets.find(b=>b.category===k);const over=bud&&a>bud.amount;return(<div key={k} style={{marginBottom:14}}>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}><span style={{fontSize:14,color:"var(--text-secondary)"}}>{c.icon} {c.label}</span><div><span style={{fontSize:14,fontWeight:700,color:c.color}}>{fmtCur(a,currency)}</span><span style={{fontSize:11,color:"var(--text-muted)",marginLeft:6}}>{p.toFixed(0)}%</span></div></div>
+                <div style={{height:5,background:"var(--surface-raised)",borderRadius:3,overflow:"hidden"}}><div style={{width:`${Math.min(p,100)}%`,height:"100%",background:c.color,borderRadius:3}}/></div>
+                {bud&&<div style={{fontSize:11,color:over?"#ef4444":"var(--text-muted)",marginTop:3}}>{over?"⚠️ Over":"Budget"}: {fmtCur(bud.amount,currency)}</div>}
+              </div>);})}
+            </div>}
+            {/* Txns */}
+            <h3 style={secTitle}>Recent Transactions</h3>
+            {allTx.slice(0,20).map((e,i)=>{const isI=e.type==="income";const c=isI?getInc(e.source):getCat(e.category);return(
+              <div key={i} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 0",borderBottom:"1px solid var(--border)"}}>
+                <div style={{width:36,height:36,borderRadius:10,background:`${c.color}15`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0}}>{c.icon}</div>
+                <div style={{flex:1,minWidth:0}}><div style={{fontSize:14,color:"var(--text-primary)",fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.description}</div><div style={{fontSize:11,color:"var(--text-muted)"}}>{daysAgo(e.date)} · {c.label}</div></div>
+                <div style={{fontSize:14,fontWeight:700,color:isI?"#22c55e":"var(--text-primary)",flexShrink:0}}>{isI?"+":"-"}{fmtCur(e.amount,currency)}</div>
+              </div>
+            );})}
+            {allTx.length===0&&<p style={{color:"var(--text-muted)",fontSize:14}}>No transactions yet.</p>}
+          </div>
+        </div>
+      );
+    }
+
+    /* ═══════════════════════════════════════════
+       MAIN APP
+       ═══════════════════════════════════════════ */
+    function MoniChat() {
+      const [user,setUser]=useState(null);
+      const [messages,setMessages]=useState([]);
+      const [expenses,setExpenses]=useState([]);
+      const [income,setIncome]=useState([]);
+      const [budgets,setBudgets]=useState([]);
+      const [reminders,setReminders]=useState([]);
+      const [streak,setStreak]=useState({count:0,lastDate:null});
+      const [nudge,setNudge]=useState({enabled:true,paused:false,time1:"09:00",time2:"20:00",lastFired:{}});
+      const [leaderboard,setLeaderboard]=useState([]);
+      const [input,setInput]=useState("");
+      const [loading,setLoading]=useState(false);
+      const [view,setView]=useState("chat");
+      const [ready,setReady]=useState(false);
+      const [copied,setCopied]=useState(false);
+      const [installPrompt,setInstallPrompt]=useState(null);
+      const endRef=useRef(null);
+      const inputRef=useRef(null);
+
+      // ── Load from localStorage ──
+      useEffect(()=>{
+        setUser(sGet(SK.USER));
+        setMessages(sGet(SK.MSGS)||[]);
+        setExpenses(sGet(SK.EXP)||[]);
+        setIncome(sGet(SK.INC)||[]);
+        setBudgets(sGet(SK.BUD)||[]);
+        setReminders(sGet(SK.REM)||[]);
+        setStreak(sGet(SK.STREAK)||{count:0,lastDate:null});
+        setNudge(sGet(SK.NUDGE)||{enabled:true,paused:false,time1:"09:00",time2:"20:00",lastFired:{}});
+        setLeaderboard(sGet(LB_KEY)||[]);
+        setReady(true);
+      },[]);
+
+      // ── Save ──
+      useEffect(()=>{if(ready&&user)sSet(SK.USER,user);},[user,ready]);
+      useEffect(()=>{if(ready&&messages.length)sSet(SK.MSGS,messages.slice(-120));},[messages,ready]);
+      useEffect(()=>{if(ready)sSet(SK.EXP,expenses);},[expenses,ready]);
+      useEffect(()=>{if(ready)sSet(SK.INC,income);},[income,ready]);
+      useEffect(()=>{if(ready)sSet(SK.BUD,budgets);},[budgets,ready]);
+      useEffect(()=>{if(ready)sSet(SK.REM,reminders);},[reminders,ready]);
+      useEffect(()=>{if(ready)sSet(SK.STREAK,streak);},[streak,ready]);
+      useEffect(()=>{if(ready)sSet(SK.NUDGE,nudge);},[nudge,ready]);
+
+      // ── Publish to leaderboard + admin ──
+      useEffect(()=>{
+        if(!ready||!user||!streak)return;
+        const lb=sGet(LB_KEY)||[];
+        const idx=lb.findIndex(e=>e.name===user.name&&e.id===user.identifier);
+        const entry={name:user.name,id:user.identifier,streak:streak.count,badge:getBadge(streak.count),updated:td()};
+        if(idx>=0)lb[idx]=entry;else lb.push(entry);
+        sSet(LB_KEY,lb);setLeaderboard(lb);
+
+        // Admin profile
+        const tmm=tm();const mE=expenses.filter(e=>e.date?.startsWith(tmm));const mI=income.filter(e=>e.date?.startsWith(tmm));
+        const byCat={};mE.forEach(e=>{byCat[e.category||"other"]=(byCat[e.category||"other"]||0)+e.amount;});
+        const topC=Object.entries(byCat).sort((a,b)=>b[1]-a[1])[0];
+        const allD=new Set(expenses.map(e=>e.date).filter(Boolean));income.forEach(e=>{if(e.date)allD.add(e.date);});
+        const profile={uid:user.identifier,name:user.name,joined:user.joined,lastActive:td(),currency:user.currency,streak:streak.count,badge:getBadge(streak.count),monthlySpend:mE.reduce((s,e)=>s+e.amount,0),monthlyIncome:mI.reduce((s,e)=>s+e.amount,0),topCategory:topC?topC[0]:null,totalExpenses:expenses.length,totalIncome:income.length,categoryBreakdown:byCat,budgetsSet:budgets.length,remindersSet:reminders.length,nudgeEnabled:nudge?.enabled&&!nudge?.paused,daysActive:allD.size,updated:new Date().toISOString()};
+        const ps=sGet(ADMIN_KEY)||[];const pi=ps.findIndex(p=>p.uid===user.identifier);
+        if(pi>=0)ps[pi]=profile;else ps.push(profile);sSet(ADMIN_KEY,ps);
+      },[streak,ready,user,expenses.length,income.length,budgets.length]);
+
+      // ── Nudge Engine with real notifications ──
+      useEffect(()=>{
+        if(!ready||!user||!nudge?.enabled||nudge?.paused)return;
+        const check=()=>{
+          const now=new Date(),tdy=td();
+          const inW=t=>{if(!t)return false;const[h,m]=t.split(":").map(Number);const tgt=h*60+m;const cur=now.getHours()*60+now.getMinutes();return cur>=tgt&&cur<tgt+5;};
+          const k1=`${tdy}-t1`,k2=`${tdy}-t2`;
+          let msg=null,isEve=false;
+          if(inW(nudge.time1)&&!nudge.lastFired?.[k1]){
+            msg=NUDGE_AM[Math.floor(Math.random()*NUDGE_AM.length)];
+            setNudge(p=>({...p,lastFired:{...p.lastFired,[k1]:true}}));
+          }else if(inW(nudge.time2)&&!nudge.lastFired?.[k2]){
+            isEve=true;msg=dayRecap(expenses,user.currency);
+            setNudge(p=>({...p,lastFired:{...p.lastFired,[k2]:true}}));
+          }
+          if(msg){
+            // In-app message
+            setMessages(p=>[...p,{role:"assistant",content:msg,clean:msg,isNudge:true,isEvening:isEve,ts:Date.now()}]);
+            setView("chat");
+            // Real browser notification (works even if tab is in background)
+            sendLocalNotif("MoniChat 🔔", isEve ? "Time for your evening expense recap!" : "Morning check-in! Log your expenses.");
+          }
+        };
+        check();const id=setInterval(check,30000);return()=>clearInterval(id);
+      },[ready,user,nudge?.enabled,nudge?.paused,nudge?.time1,nudge?.time2,expenses]);
+
+      // ── Weekly Summary (Sunday 6-8pm) ──
+      useEffect(()=>{
+        if(!ready||!user||!nudge?.enabled)return;
+        const check=()=>{
+          const now=new Date();if(now.getDay()!==0)return;
+          const key=`${td()}-weekly`;if(nudge.lastFired?.[key])return;
+          if(now.getHours()<18||now.getHours()>20)return;
+          const s=weekSummary(expenses,income,streak,user.currency,user.name);
+          setMessages(p=>[...p,{role:"assistant",content:s,clean:s,isWeeklySummary:true,ts:Date.now()}]);
+          setNudge(p=>({...p,lastFired:{...p.lastFired,[key]:true}}));
+          sendLocalNotif("MoniChat 📊","Your weekly financial summary is ready!");
+        };
+        check();const id=setInterval(check,60000);return()=>clearInterval(id);
+      },[ready,user,nudge,expenses,income,streak]);
+
+      // ── PWA install prompt ──
+      useEffect(()=>{
+        const handler=e=>{e.preventDefault();setInstallPrompt(e);};
+        window.addEventListener("beforeinstallprompt",handler);
+        return()=>window.removeEventListener("beforeinstallprompt",handler);
+      },[]);
+
+      const installApp=async()=>{if(!installPrompt)return;installPrompt.prompt();const r=await installPrompt.userChoice;if(r.outcome==="accepted")setInstallPrompt(null);};
+
+      // ── Scroll ──
+      useEffect(()=>{endRef.current?.scrollIntoView({behavior:"smooth"});},[messages,loading]);
+
+      // ── Streak with milestones ──
+      const updateStreak=useCallback(()=>{
+        const tdy=td();
+        setStreak(prev=>{
+          if(prev.lastDate===tdy)return prev;
+          const yday=new Date(Date.now()-864e5).toISOString().split("T")[0];
+          const n=prev.lastDate===yday?prev.count+1:1;
+          const ms=getMilestone(n);
+          if(ms){const celeb=`${ms.badge} STREAK MILESTONE: ${ms.title}!\n\n${ms.msg}\n\n🔥 ${n}-day streak!`;
+            setMessages(p=>[...p,{role:"assistant",content:celeb,clean:celeb,isMilestone:true,ts:Date.now()+1}]);
+            sendLocalNotif(`${ms.badge} ${ms.title}!`,ms.msg);
+          }
+          return{count:n,lastDate:tdy};
+        });
+      },[]);
+
+      // ── Onboard ──
+      const handleOnboard=useCallback((ud,ns)=>{
+        setUser(ud);setNudge(ns);
+        setMessages([{role:"assistant",content:`Hey ${ud.name}! 👋 Welcome to MoniChat — your financial memory.\n\nTell me naturally:\n• "Lunch was $18"\n• "Got paid $3,000"\n• "Uber 12, groceries 45"\n\n🔔 Nudges at ${timeLabel(ns.time1)} & ${timeLabel(ns.time2)}.\n📊 Weekly summary every Sunday.\n🏆 Your streak is on the leaderboard!\n\nWhat's your first entry?`,ts:Date.now()}]);
+      },[]);
+
+      // ── API ──
+      const buildApi=useCallback(text=>{
+        const ctx=buildCtx(user,expenses,income,budgets,reminders,nudge);
+        const recent=messages.slice(-16).map(m=>({role:m.role,content:m.content}));
+        return[{role:"user",content:ctx},{role:"assistant",content:"Understood."}, ...recent,{role:"user",content:text}];
+      },[user,expenses,income,budgets,reminders,nudge,messages]);
+
+      // ── Send ──
+      const send=useCallback(async(override)=>{
+        const text=(override||input).trim();if(!text||loading)return;
+        if(!override)setInput("");
+        setMessages(p=>[...p,{role:"user",content:text,ts:Date.now()}]);
+        setLoading(true);updateStreak();
+        try{
+          const res=await fetch(CONFIG.API_ENDPOINT,{
+            method:"POST",headers:{"Content-Type":"application/json"},
+            body:JSON.stringify({model:CONFIG.MODEL,max_tokens:1000,messages:buildApi(text)}),
+          });
+          const data=await res.json();
+          const raw=data.content?.map(c=>c.type==="text"?c.text:"").filter(Boolean).join("\n")||"Hmm, try again?";
+          const nE=parseTag(raw,"expense"),nI=parseTag(raw,"income"),nB=parseTag(raw,"budget"),nR=parseTag(raw,"reminder"),nN=parseTag(raw,"nudge"),nU=parseTag(raw,"undo");
+          if(nE.length)setExpenses(p=>[...p,...nE.map(e=>({...e,id:uid()}))]);
+          if(nI.length)setIncome(p=>[...p,...nI.map(e=>({...e,id:uid()}))]);
+          if(nB.length)setBudgets(p=>{const u=[...p];nB.forEach(nb=>{const i=u.findIndex(b=>b.category===nb.category);if(i>=0)u[i]=nb;else u.push(nb);});return u;});
+          if(nR.length)setReminders(p=>[...p,...nR.map(r=>({...r,active:true,id:uid()}))]);
+          if(nN.length){const n=nN[0];setNudge(p=>({...p,time1:n.time1||p.time1,time2:n.time2||p.time2,enabled:n.enabled??p.enabled,paused:n.paused??p.paused,lastFired:{}}));}
+          if(nU.length&&expenses.length)setExpenses(p=>p.slice(0,-1));
+          setMessages(p=>[...p,{role:"assistant",content:raw,clean:cleanText(raw),expenses:nE,income:nI,reminders:nR,ts:Date.now()}]);
+        }catch(err){console.error(err);setMessages(p=>[...p,{role:"assistant",content:"Connection issue. Please try again.",ts:Date.now()}]);
+        }finally{setLoading(false);}
+      },[input,loading,buildApi,updateStreak,expenses.length]);
+
+      const handleQuickLog=useCallback(cat=>{setInput(`${cat.icon} ${cat.label}: $`);setTimeout(()=>inputRef.current?.focus(),50);},[]);
+
+      const handleShare=useCallback(async()=>{
+        const text=weekSummary(expenses,income,streak,user?.currency,user?.name)+`\n\n—\nTracked with ${CONFIG.APP_NAME} 💸\n${CONFIG.APP_URL}`;
+        try{
+          if(navigator.share){await navigator.share({title:"My MoniChat Weekly Summary",text});}
+          else{await navigator.clipboard.writeText(text);setCopied(true);setTimeout(()=>setCopied(false),2500);}
+        }catch{try{await navigator.clipboard.writeText(text);setCopied(true);setTimeout(()=>setCopied(false),2500);}catch{}}
+      },[expenses,income,streak,user]);
+
+      const handleReset=useCallback(()=>{
+        if(!confirm("Erase all data?"))return;
+        Object.values(SK).forEach(k=>sDel(k));sDel(LB_KEY);sDel(ADMIN_KEY);
+        setUser(null);setMessages([]);setExpenses([]);setIncome([]);setBudgets([]);setReminders([]);
+        setStreak({count:0,lastDate:null});setNudge({enabled:true,paused:false,time1:"09:00",time2:"20:00",lastFired:{}});
+      },[]);
+
+      const tmm=tm();
+      const monthTotal=useMemo(()=>expenses.filter(e=>e.date?.startsWith(tmm)).reduce((s,e)=>s+e.amount,0),[expenses,tmm]);
+      const monthInc=useMemo(()=>income.filter(e=>e.date?.startsWith(tmm)).reduce((s,e)=>s+e.amount,0),[income,tmm]);
+      const prompts=["Got paid $3,000 salary","What did I spend this month?","Set food budget to $400","Show my weekly summary"];
+
+      if(!ready)return(<div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100vh",background:"var(--bg-deep)"}}><div style={{fontSize:48}}>💸</div><div style={{color:"var(--text-muted)",marginTop:12,fontSize:14}}>Loading...</div></div>);
+      if(!user)return <Onboarding onDone={handleOnboard}/>;
+
+      return(
+        <div style={{display:"flex",flexDirection:"column",height:"100vh",background:"var(--bg)",fontFamily:"var(--font)",color:"var(--text-primary)",position:"relative",overflow:"hidden"}}>
+          {/* Header */}
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",paddingTop:`calc(12px + env(safe-area-inset-top, 0px))`,borderBottom:"1px solid var(--border)",background:"var(--bg-deep)",zIndex:10,flexShrink:0}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}} onDoubleClick={()=>setView("admin")}>
+              <div style={{fontSize:26}}>💸</div>
+              <div>
+                <div style={{fontSize:16,fontWeight:700,fontFamily:"var(--font-display)",color:"var(--accent)"}}>MoniChat</div>
+                <div style={{fontSize:11,color:"var(--text-muted)",display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+                  {monthInc>0&&<span style={{color:"#22c55e"}}>↑{fmtCur(monthInc,user.currency)}</span>}
+                  <span>↓{fmtCur(monthTotal,user.currency)}</span>
+                  {streak.count>0&&<span style={{color:"#f59e0b"}}>{getBadge(streak.count)}{streak.count}d</span>}
+                </div>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:5}}>
+              <button onClick={()=>setView(view==="leaderboard"?"chat":"leaderboard")} style={hdrBtn} title="Leaderboard">🏆</button>
+              <button onClick={()=>setView(view==="nudge_settings"?"chat":"nudge_settings")} style={{...hdrBtn,color:nudge?.enabled&&!nudge?.paused?"var(--accent)":"var(--text-muted)"}} title="Nudges">🔔</button>
+              <button onClick={()=>setView(view==="dashboard"?"chat":"dashboard")} style={hdrBtn} title="Dashboard">📊</button>
+              <button onClick={handleReset} style={hdrBtn} title="Reset">⟳</button>
+            </div>
+          </div>
+
+          {/* Overlays */}
+          {view==="dashboard"&&<Dashboard expenses={expenses} income={income} budgets={budgets} reminders={reminders} currency={user.currency} streak={streak} userName={user.name} onClose={()=>setView("chat")} onShare={handleShare}/>}
+          {view==="nudge_settings"&&<NudgePanel nudge={nudge} onChange={setNudge} onClose={()=>setView("chat")}/>}
+          {view==="leaderboard"&&<Leaderboard entries={leaderboard} currentUser={user.name} onClose={()=>setView("chat")}/>}
+          {view==="admin"&&<AdminDash onClose={()=>setView("chat")}/>}
+
+          {copied&&<div style={{position:"absolute",top:60,left:"50%",transform:"translateX(-50%)",zIndex:100,padding:"8px 20px",borderRadius:10,background:"#22c55e",color:"white",fontSize:13,fontWeight:600,animation:"fadeUp 0.3s ease"}}>✓ Copied!</div>}
+
+          {/* Messages */}
+          <div style={{flex:1,overflowY:"auto",padding:"14px 14px 6px",WebkitOverflowScrolling:"touch"}}>
+            {messages.map((msg,i)=>{
+              const isU=msg.role==="user",isN=msg.isNudge,isM=msg.isMilestone,isW=msg.isWeeklySummary,isSp=isN||isM||isW;
+              let bg,brd;
+              if(isU){bg="linear-gradient(135deg,#d97706,#b45309)";brd="none";}
+              else if(isM){bg="linear-gradient(135deg,rgba(139,92,246,0.12),rgba(245,158,11,0.08))";brd="1px solid rgba(139,92,246,0.3)";}
+              else if(isW){bg="linear-gradient(135deg,rgba(34,197,94,0.08),rgba(59,130,246,0.06))";brd="1px solid rgba(34,197,94,0.25)";}
+              else if(isN){bg="linear-gradient(135deg,rgba(245,158,11,0.08),rgba(245,158,11,0.03))";brd="1px solid var(--accent-border)";}
+              else{bg="var(--surface)";brd="1px solid var(--border)";}
+              return(
+                <div key={i} style={{display:"flex",justifyContent:isU?"flex-end":"flex-start",marginBottom:10,animation:isM?"celebPulse 0.6s ease":"fadeUp 0.25s ease"}}>
+                  <div style={{maxWidth:"85%",padding:isSp?"13px 15px":"11px 15px",borderRadius:isU?"18px 18px 4px 18px":"18px 18px 18px 4px",background:bg,color:isU?"#fefce8":"var(--text-primary)",border:brd,fontSize:14,lineHeight:1.55}}>
+                    {isN&&<div style={{display:"flex",alignItems:"center",gap:5,marginBottom:6,fontSize:11,color:"var(--accent)",fontWeight:700,textTransform:"uppercase",letterSpacing:0.5}}>🔔 Daily Nudge</div>}
+                    {isM&&<div style={{display:"flex",alignItems:"center",gap:5,marginBottom:6,fontSize:11,color:"#a78bfa",fontWeight:700,textTransform:"uppercase",letterSpacing:0.5}}>🏆 Achievement Unlocked</div>}
+                    {isW&&<div style={{display:"flex",alignItems:"center",gap:5,marginBottom:6,fontSize:11,color:"#22c55e",fontWeight:700,textTransform:"uppercase",letterSpacing:0.5}}>📊 Weekly Summary</div>}
+                    <div style={{whiteSpace:"pre-wrap"}}>{msg.clean||cleanText(msg.content)}</div>
+                    {msg.expenses?.length>0&&<div style={{marginTop:4,display:"flex",flexWrap:"wrap"}}>{msg.expenses.map((e,j)=><ExpPill key={j} exp={e} cur={user.currency}/>)}</div>}
+                    {msg.income?.length>0&&<div style={{marginTop:4,display:"flex",flexWrap:"wrap"}}>{msg.income.map((e,j)=><IncPill key={j} inc={e} cur={user.currency}/>)}</div>}
+                    {msg.reminders?.length>0&&<div style={{marginTop:4,display:"flex",flexWrap:"wrap"}}>{msg.reminders.map((r,j)=><RemPill key={j} rem={r}/>)}</div>}
+                    {isN&&<QuickLogBar onSelect={handleQuickLog}/>}
+                    {isW&&<button onClick={handleShare} style={{marginTop:10,padding:"7px 16px",borderRadius:10,border:"1px solid rgba(34,197,94,0.3)",background:"rgba(34,197,94,0.1)",color:"#22c55e",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"var(--font)"}}>📤 Share summary</button>}
+                    <div style={{fontSize:10,color:isU?"rgba(254,252,232,0.5)":"var(--text-muted)",marginTop:6,textAlign:isU?"right":"left"}}>{new Date(msg.ts).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}</div>
+                  </div>
+                </div>
+              );
+            })}
+            {loading&&(<div style={{display:"flex",justifyContent:"flex-start",marginBottom:10}}><div style={{padding:"11px 15px",borderRadius:"18px 18px 18px 4px",background:"var(--surface)",border:"1px solid var(--border)"}}><div style={{display:"flex",gap:5,padding:"6px 2px"}}>{[0,1,2].map(i=>(<div key={i} style={{width:7,height:7,borderRadius:"50%",background:"var(--accent)",animation:`dotPulse 1.2s ${i*0.15}s ease-in-out infinite`}}/>))}</div></div></div>)}
+            {messages.length<=1&&!loading&&(<div style={{display:"flex",flexWrap:"wrap",gap:8,padding:"12px 0",justifyContent:"center"}}>{prompts.map(q=>(<button key={q} onClick={()=>{setInput(q);setTimeout(()=>inputRef.current?.focus(),50);}} style={{padding:"8px 16px",borderRadius:20,border:"1px solid var(--border)",background:"var(--surface)",color:"var(--text-secondary)",fontSize:13,cursor:"pointer",fontFamily:"var(--font)"}}>{q}</button>))}</div>)}
+            <div ref={endRef}/>
+          </div>
+
+          {/* Input */}
+          <div style={{padding:"10px 14px",paddingBottom:`calc(14px + env(safe-area-inset-bottom, 0px))`,borderTop:"1px solid var(--border)",background:"var(--bg-deep)",flexShrink:0}}>
+            <div style={{display:"flex",gap:10,alignItems:"center"}}>
+              <input ref={inputRef} value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&send()} placeholder="Tell me what you spent..." style={{flex:1,padding:"13px 16px",background:"var(--surface)",border:"1px solid var(--border)",borderRadius:14,color:"var(--text-primary)",fontSize:16,fontFamily:"var(--font)"}}/>
+              <button onClick={()=>send()} disabled={!input.trim()||loading} style={{width:46,height:46,borderRadius:13,border:"none",background:input.trim()&&!loading?"linear-gradient(135deg,#f59e0b,#d97706)":"var(--surface)",color:input.trim()&&!loading?"#451a03":"var(--text-muted)",fontSize:20,fontWeight:700,cursor:input.trim()&&!loading?"pointer":"default",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>↑</button>
+            </div>
+          </div>
+
+          {/* PWA Install Banner */}
+          {installPrompt&&(
+            <div className="install-banner">
+              <div style={{flex:1}}><div style={{fontSize:14,fontWeight:700,color:"var(--text-primary)"}}>Add MoniChat to Home Screen</div><div style={{fontSize:12,color:"var(--text-muted)"}}>Quick access + offline support</div></div>
+              <button onClick={installApp} style={{background:"var(--accent)",color:"#451a03"}}>Install</button>
+              <button onClick={()=>setInstallPrompt(null)} style={{background:"transparent",color:"var(--text-muted)",border:"1px solid var(--border)"}}>Later</button>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    /* ═══════════════════════════════════════════
+       SHARED STYLES
+       ═══════════════════════════════════════════ */
+    const inputStyle={width:"100%",padding:"14px 16px",background:"var(--surface)",border:"1px solid var(--border)",borderRadius:13,color:"var(--text-primary)",fontSize:16,fontFamily:"var(--font)"};
+    const btnPrimary={width:"100%",padding:"14px",background:"linear-gradient(135deg,#f59e0b,#d97706)",border:"none",borderRadius:13,color:"#451a03",fontSize:16,fontWeight:700,fontFamily:"var(--font-display)",cursor:"pointer"};
+    const hdrBtn={width:36,height:36,borderRadius:10,border:"1px solid var(--border)",background:"var(--surface)",fontSize:16,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",color:"var(--text-secondary)"};
+    const closeBtn={width:36,height:36,borderRadius:10,border:"1px solid var(--border)",background:"transparent",color:"var(--text-muted)",fontSize:16,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"};
+    const secTitle={fontSize:12,color:"var(--text-muted)",textTransform:"uppercase",letterSpacing:1,marginBottom:14};
+
+    /* ═══════════════════════════════════════════
+       MOUNT
+       ═══════════════════════════════════════════ */
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(React.createElement(MoniChat));
+  </script>
+
+  <!-- Service Worker Registration -->
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("/sw.js")
+          .then(reg => console.log("[SW] Registered:", reg.scope))
+          .catch(err => console.warn("[SW] Registration failed:", err));
+      });
+    }
+  </script>
+</body>
+</html>

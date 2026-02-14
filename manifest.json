@@ -1,0 +1,21 @@
+{
+  "name": "MoniChat — Your Financial Memory",
+  "short_name": "MoniChat",
+  "description": "Track spending through natural conversation. Your financial memory, always with you.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0c0f14",
+  "theme_color": "#f59e0b",
+  "categories": ["finance", "productivity"],
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icons/icon-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "screenshots": [],
+  "shortcuts": [
+    { "name": "Log Expense", "url": "/?action=log", "description": "Quick log an expense" },
+    { "name": "Dashboard", "url": "/?action=dashboard", "description": "View your financial dashboard" }
+  ]
+}
